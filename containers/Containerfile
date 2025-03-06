@@ -1,0 +1,43 @@
+ARG BASE_IMAGE="ghcr.io/gbraad-dotfiles/fedora"
+ARG BASE_VERSION="41"
+
+FROM ${BASE_IMAGE}:${BASE_VERSION}
+
+USER root
+
+# Make sure that the rootfiles package can be installed
+RUN mkdir -p /var/roothome /data
+
+#install additional package repositories
+RUN dnf install -y \
+		https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
+		https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm \
+    && dnf config-manager addrepo --from-repofile=https://repo.vivaldi.com/archive/vivaldi-fedora.repo
+
+RUN dnf group install -y \
+		base-graphical \
+		container-management \
+		core \
+		fonts \
+		gnome-desktop \
+		guest-desktop-agents \
+		hardware-support \
+		multimedia \
+		networkmanager-submodules \
+		printing \
+		virtualization \
+		workstation-product \
+	&& dnf install -y \
+		vivaldi-stable
+
+RUN systemctl set-default graphical.target
+
+# See https://fedoraproject.org/wiki/Changes/UnprivilegedUpdatesAtomicDesktops:
+#     Avoid annoying popups when logged in.
+RUN dnf install -y fedora-release-ostree-desktop
+
+# Close once https://gitlab.com/fedora/bootc/base-images/-/issues/28 is merged and released in the base image
+RUN rm -rf /var/run && ln -s /run /var/
+
+# Final lint step to prevent easy-to-catch issues at build time
+#RUN [ -f /usr/bin/bootc ] && bootc container lint
