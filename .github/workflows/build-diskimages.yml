@@ -70,6 +70,10 @@ jobs:
           --local \
           ${{ env.IMAGE_NAME }}
 
+#    - name: Split output result
+#      run: |
+#        sudo split -b 1800M --numeric-suffixes=0 --suffix-length=1 ./output/qcow2/disk.qcow2    ./output/qcow2/disk.qcow2_part
+          
 # Too unreliable!
 # 
 #    - name: Build image - anaconda ISO
@@ -95,17 +99,40 @@ jobs:
 #     run: |
 #       sudo split -b 1800M --numeric-suffixes=0 --suffix-length=1 ./output/bootiso/install.iso ./output/bootiso/install.iso_part
 
-    - name: Split output result
-      run: |
-        sudo split -b 1800M --numeric-suffixes=0 --suffix-length=1 ./output/qcow2/disk.qcow2    ./output/qcow2/disk.qcow2_part
 
     - name: Set release tag
-      run: echo "TAG=$(date +'%y%m%d')" >> $GITHUB_ENV
+      id: get-tag
+      run: |
+        echo "TAG=$(date +'%y%m%d')" >> $GITHUB_OUTPUT
 
-    - name: Create a GitHub release
-      uses: ncipollo/release-action@v1
-      with:
-        tag: ${{ env.TAG }}
-        name: Disk images (${{ env.TAG }})
-        body: ${{ env.BODY }}
-        artifacts: "output/bootiso/*,./output/qcow2/*,"
+#    - name: Create a GitHub release
+#      uses: ncipollo/release-action@v1
+#      with:
+#        tag: ${{steps.get-tag.outputs.TAG}}
+#        name: Disk images (${{steps.get-tag.outputs.TAG}})
+#        body: ${{steps.get-tag.outputs.TAG}}
+#        artifacts: "output/bootiso/*,./output/qcow2/*,"
+
+    - name: Wrap disk image in container
+      run: |
+        podman build -t ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest \
+          -f containers/Containerfile-disk .
+
+    - name: Tag image container
+      run: |
+        podman tag ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest \
+          ghcr.io/gbraad-dotfiles/fedora-workstation-disk:41
+        podman tag ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest \
+          ghcr.io/gbraad-dotfiles/fedora-workstation-disk:${{steps.get-tag.outputs.TAG}}
+
+    - name: Login to registry
+      run: |
+        podman login ghcr.io -u ${{ github.actor }} \
+          -p ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Push image container to registry
+      run: |
+        podman push ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest
+        podman push ghcr.io/gbraad-dotfiles/fedora-workstation-disk:41
+        podman push ghcr.io/gbraad-dotfiles/fedora-workstation-disk:${{steps.get-tag.outputs.TAG}}
+
