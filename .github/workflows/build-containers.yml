@@ -6,7 +6,7 @@ env:
     BASE_IMAGE: ghcr.io/gbraad-dotfiles/fedora
     BASE_VERSION: 41
     IMAGE_NAME: fedora-workstation
-    IMAGE_TAGS: 41 latest ${{ github.sha }}
+    IMAGE_TAGS: 41 latest
     IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
     REGISTRY_USER: ${{ github.actor }}
     REGISTRY_PASSWORD: ${{ github.token }}
