@@ -6,14 +6,67 @@ env:
     BASE_IMAGE: ghcr.io/gbraad-dotfiles/fedora
     BASE_VERSION: 41
     IMAGE_NAME: fedora-workstation
-    IMAGE_TAGS: 41 latest
+    IMAGE_TAGS: latest
     IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
     REGISTRY_USER: ${{ github.actor }}
     REGISTRY_PASSWORD: ${{ github.token }}
 
 jobs:
-  build:
-    name: build-containers
+  build-arm64:
+    name: build-container-arm64
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04-arm
+
+    steps:
+      - name: Remove unwanted stuff
+        uses: gbraad-devenv/remove-unwanted@v1
+
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        id: build-image
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: ${{ env.IMAGE_NAME }}
+          tags: ${{ env.IMAGE_TAGS }}
+          oci: true
+          build-args: |
+            BASE_IMAGE=${{ env.BASE_IMAGE }}
+            BASE_VERSION=${{ env.BASE_VERSION }}
+          containerfiles: |
+            ./containers/Containerfile
+
+      - name: Run podman save - workstation-arm
+        run: |
+          podman save ${{ steps.build-image.outputs.image }} \
+            --format=oci-dir -o oci-arm64
+
+      - name: Run podman export - workstation-arm
+        run: |
+          podman create --name ${{ env.IMAGE_NAME }}-arm64 \
+            ${{ steps.build-image.outputs.image }}          
+          podman export ${{ env.IMAGE_NAME }}-arm64 -o ${{ env.IMAGE_NAME }}-arm64.tar
+          gzip ${{ env.IMAGE_NAME }}-arm64.tar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oci-arm64
+          path: oci-arm64/
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-arm64
+          path: ${{ env.IMAGE_NAME }}-arm64.tar.gz
+          retention-days: 7
+
+
+  build-amd64:
+    name: build-container-amd64
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -22,35 +75,105 @@ jobs:
           - ubuntu-latest
 
     steps:
-    - name: Remove unwanted stuff
-      uses: gbraad-devenv/remove-unwanted@v1
+      - name: Remove unwanted stuff
+        uses: gbraad-devenv/remove-unwanted@v1
 
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Build image
-      id: build-image
-      uses: redhat-actions/buildah-build@v2
-      with:
-        image: ${{ env.IMAGE_NAME }}
-        tags: ${{ env.IMAGE_TAGS }}
-        oci: true
-        build-args: |
-          BASE_IMAGE=${{ env.BASE_IMAGE }}
-          BASE_VERSION=${{ env.BASE_VERSION }}
-        containerfiles: |
-          ./containers/Containerfile
+      - name: Build image
+        id: build-image
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: ${{ env.IMAGE_NAME }}
+          tags: ${{ env.IMAGE_TAGS }}
+          oci: true
+          build-args: |
+            BASE_IMAGE=${{ env.BASE_IMAGE }}
+            BASE_VERSION=${{ env.BASE_VERSION }}
+          containerfiles: |
+            ./containers/Containerfile
 
-    - name: Push to registry
-      id: push-to-registry
-      uses: redhat-actions/push-to-registry@v2
-      with:
-        image: ${{ steps.build-image.outputs.image }}
-        tags: ${{ steps.build-image.outputs.tags }}
-        registry: ${{ env.IMAGE_REGISTRY }}
-        username: ${{ env.REGISTRY_USER }}
-        password: ${{ env.REGISTRY_PASSWORD }}
-        extra-args: |
-          --disable-content-trust
+      - name: Run podman save - workstation
+        run: |
+          podman save ${{ steps.build-image.outputs.image }} \
+            --format=oci-dir -o oci-amd64
 
-    - name: Print image url
-      run: echo "Image pushed to ${{ steps.push-to-registry.outputs.registry-paths }}"
+      - name: Run podman export - workstation
+        run: |
+          podman create --name ${{ env.IMAGE_NAME }}-amd64 \
+            ${{ steps.build-image.outputs.image }}          
+          podman export ${{ env.IMAGE_NAME }}-amd64 -o ${{ env.IMAGE_NAME }}-amd64.tar
+          gzip ${{ env.IMAGE_NAME }}-amd64.tar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oci-amd64
+          path: oci-amd64/
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-amd64
+          path: ${{ env.IMAGE_NAME }}-amd64.tar.gz
+          retention-days: 7
+
+  push-manifest:
+    name: push-containers
+    needs: 
+      - build-arm64
+      - build-amd64
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download arm64
+        uses: actions/download-artifact@v4
+        with:
+          name: oci-arm64
+          path: oci-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: rootfs-arm64
+          path: rootfs
+      - name: Download amd64
+        uses: actions/download-artifact@v4
+        with:
+          name: oci-amd64
+          path: oci-amd64
+      - uses: actions/download-artifact@v4
+        with:
+          name: rootfs-amd64
+          path: rootfs
+
+      - name: Set release tag
+        id: get-tag
+        run: |
+          echo "TAG=$(date +'%y%m%d')" >> $GITHUB_OUTPUT
+
+      - name: Create manifest
+        run: |
+          podman manifest create ${{ env.IMAGE_NAME }}-manifest
+
+      - name: Add arm64 to manifest
+        run: |
+          podman manifest add ${{ env.IMAGE_NAME }}-manifest oci:$(pwd)/oci-arm64
+      - name: Add amd64 to manifest
+        run: |
+          podman manifest add ${{ env.IMAGE_NAME }}-manifest oci:$(pwd)/oci-amd64
+
+      - name: Login to registry
+        run: |
+          podman login ghcr.io -u ${{ github.actor }} \
+            -p ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push container to registry
+        run: |
+          podman manifest push ${{ env.IMAGE_NAME }}-manifest docker://${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          podman manifest push ${{ env.IMAGE_NAME }}-manifest docker://${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:41
+          podman manifest push ${{ env.IMAGE_NAME }}-manifest docker://${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{steps.get-tag.outputs.TAG}}
+
+#      - name: Upload to release
+#        uses: softprops/action-gh-release@v1
+#        with:
+#          tag_name: ${{ steps.get-tag.outputs.TAG }}
+#          files: rootfs/*.tar.gz
+
