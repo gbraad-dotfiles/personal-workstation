@@ -2,7 +2,7 @@ name: Build qcow2 disk image
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 */2 * *"
+    - cron: "0 1 * * 0"
 
 env:
     IMAGE_NAME: ghcr.io/gbraad-dotfiles/fedora-workstation-bootc:latest
