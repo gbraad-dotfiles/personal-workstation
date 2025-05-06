@@ -1,0 +1,27 @@
+{
+    "name": "Personal workstation remote desktop environment",
+    "image": "ghcr.io/gbraad-dotfiles/fedora-workstation:latest",
+
+    "runArgs": [ "--cap-add=NET_ADMIN", "--cap-add=NET_RAW", "--device=/dev/net/tun", "--device=/dev/fuse" ],
+    "overrideCommand": false,
+    "privileged": true,
+    "remoteUser": "gbraad",
+
+     "features": {
+        "ghcr.io/gbraad-vscode/devcontainer-features/ssh-keys:latest": {
+            "username": "gbraad"
+        }
+     },
+  
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-vscode.Theme-TomorrowKit",
+                "gbraad.analogue-clock",
+                "gbraad.dotfiles-checker",
+                "gbraad.dotfiles-tools",
+                "gbraad.systemd-universal-manager"
+            ]
+        }
+    }
+}
