@@ -22,117 +22,109 @@ jobs:
           - ubuntu-latest
 
     steps:
-    - name: Remove unwanted stuff
-      uses: gbraad-devenv/remove-unwanted@v1
+      - name: Remove unwanted stuff
+        uses: gbraad-devenv/remove-unwanted@v1
 
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Workaround podman issues in GH actions
-      run: |
-        # see https://github.com/osbuild/bootc-image-builder/issues/446
-        sudo rm -rf /var/lib/containers/storage
-        sudo mkdir -p /etc/containers
-        echo -e "[storage]\ndriver = \"overlay\"\nrunroot = \"/run/containers/storage\"\ngraphroot = \"/var/lib/containers/storage\"" | sudo tee /etc/containers/storage.conf
+      - name: Workaround podman issues in GH actions
+        run: |
+          # see https://github.com/osbuild/bootc-image-builder/issues/446
+          sudo rm -rf /var/lib/containers/storage
+          sudo mkdir -p /etc/containers
+          echo -e "[storage]\ndriver = \"overlay\"\nrunroot = \"/run/containers/storage\"\ngraphroot = \"/var/lib/containers/storage\"" | sudo tee /etc/containers/storage.conf
 
-    - name: Workarounds for GH runner diskspace
-      run: |
-        # use custom basetemp here because /var/tmp is on a smaller disk
-        # than /mnt
-        sudo mkdir -p /mnt/var/tmp/bib-tests
-        # on GH runners /mnt has 70G free space, use that for our container
-        # storage
-        sudo mkdir -p /mnt/var/lib/containers
-        sudo mount -o bind /mnt/var/lib/containers /var/lib/containers
-        sudo mkdir /var/lib/containers/storage
+      - name: Workarounds for GH runner diskspace
+        run: |
+          # use custom basetemp here because /var/tmp is on a smaller disk
+          # than /mnt
+          sudo mkdir -p /mnt/var/tmp/bib-tests
+          # on GH runners /mnt has 70G free space, use that for our container
+          # storage
+          sudo mkdir -p /mnt/var/lib/containers
+          sudo mount -o bind /mnt/var/lib/containers /var/lib/containers
+          sudo mkdir /var/lib/containers/storage
 
-    - name: Build prepare
-      run: |
-        mkdir -p ./output
-        sed -e 's;@@IMAGE@@;${{ env.IMAGE_NAME }};g' config.toml.in > config.toml
-        sudo podman pull ${{ env.IMAGE_NAME }}
+      - name: Build prepare
+        run: |
+          mkdir -p ./output
+          sed -e 's;@@IMAGE@@;${{ env.IMAGE_NAME }};g' config.toml.in > config.toml
+          sudo podman pull ${{ env.IMAGE_NAME }}
 
-    - name: Build image - qcow2
-      id: build-image-qcow
-      run: |
-        sudo podman run \
-          --rm \
-          -it \
-          --privileged \
-          --pull=newer \
-          --security-opt label=type:unconfined_t \
-          -v ./config.toml:/config.toml:ro \
-          -v ./output:/output \
-          -v /var/lib/containers/storage:/var/lib/containers/storage \
-          ${{ env.BIB_IMAGE }} \
-          --target-arch ${{ env.ARCH }} \
-          --type qcow2 \
-          --rootfs ${{ env.ROOTFS }} \
-          --local \
-          ${{ env.IMAGE_NAME }}
+      - name: Build image - qcow2
+        id: build-image-qcow
+        run: |
+          sudo podman run \
+            --rm \
+            -it \
+            --privileged \
+            --pull=newer \
+            --security-opt label=type:unconfined_t \
+            -v ./config.toml:/config.toml:ro \
+            -v ./output:/output \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
+            ${{ env.BIB_IMAGE }} \
+            --target-arch ${{ env.ARCH }} \
+            --type qcow2 \
+            --rootfs ${{ env.ROOTFS }} \
+            --local \
+            ${{ env.IMAGE_NAME }}
 
-#    - name: Split output result
-#      run: |
-#        sudo split -b 1800M --numeric-suffixes=0 --suffix-length=1 ./output/qcow2/disk.qcow2    ./output/qcow2/disk.qcow2_part
-          
-# Too unreliable!
-# 
-#    - name: Build image - anaconda ISO
-#      id: build-image-iso
-#      run: |
-#        sudo podman run \
-#          --rm \
-#          -it \
-#          --privileged \
-#          --pull=newer \
-#          --security-opt label=type:unconfined_t \
-#          -v ./config.toml:/config.toml:ro \
-#          -v ./output:/output \
-#          -v /var/lib/containers/storage:/var/lib/containers/storage \
-#          ${{ env.BIB_IMAGE }} \
-#          --target-arch ${{ env.ARCH }} \
-#          --type anaconda-iso \
-#          --rootfs ${{ env.ROOTFS }} \
-#          --local \
-#          ${{ env.IMAGE_NAME }}
-#
-#   - name: Split output result
-#     run: |
-#       sudo split -b 1800M --numeric-suffixes=0 --suffix-length=1 ./output/bootiso/install.iso ./output/bootiso/install.iso_part
+      - uses: actions/upload-artifact@v4
+        with:
+          name: disk-amd64
+          path: output/qcow2/disk.qcow2
+          retention-days: 7
 
+  push:
+    name: Push image
+    needs:
+      - build
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+    container: 
+      image: ghcr.io/gbraad-actions/fedora:stable
+      options: --privileged
 
-    - name: Set release tag
-      id: get-tag
-      run: |
-        echo "TAG=$(date +'%y%m%d')" >> $GITHUB_OUTPUT
+    steps:
+      - name: Download amd64
+        uses: actions/download-artifact@v4
+        with:
+          name: disk-amd64
+          path: disk-amd64/
 
-#    - name: Create a GitHub release
-#      uses: ncipollo/release-action@v1
-#      with:
-#        tag: ${{steps.get-tag.outputs.TAG}}
-#        name: Disk images (${{steps.get-tag.outputs.TAG}})
-#        body: ${{steps.get-tag.outputs.TAG}}
-#        artifacts: "output/bootiso/*,./output/qcow2/*,"
+      - name: Prepare and compress disk image
+        run: |
+          mv ./disk-amd64/disk.qcow2 ./disk-amd64/machine.x86_64.qemu.qcow2
+          zstd --rm -T0 -14 ./disk-amd64/machine.x86_64.qemu.qcow2
 
-    - name: Wrap disk image in container
-      run: |
-        podman build -t ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest \
-          -f containers/Containerfile-disk .
+      - name: Wrap disk image in container
+        run: |
+          buildah manifest add --artifact --artifact-type="" \
+            --os="linux" --arch="x86_64" --annotation "disktype=qemu" \
+            localhost/machine-os \
+            ./disk-amd64/machine.x86_64.qemu.qcow2.zst
 
-    - name: Tag image container
-      run: |
-        podman tag ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest \
-          ghcr.io/gbraad-dotfiles/fedora-workstation-disk:41
-        podman tag ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest \
-          ghcr.io/gbraad-dotfiles/fedora-workstation-disk:${{steps.get-tag.outputs.TAG}}
+      - name: Login to ghcr.io
+        run: |
+          podman login ghcr.io -u ${{ github.actor }} \
+            -p ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Login to registry
-      run: |
-        podman login ghcr.io -u ${{ github.actor }} \
-          -p ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Push image container to registry
-      run: |
-        podman push ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest
-        podman push ghcr.io/gbraad-dotfiles/fedora-workstation-disk:41
-        podman push ghcr.io/gbraad-dotfiles/fedora-workstation-disk:${{steps.get-tag.outputs.TAG}}
-
+      - name: Tag and push image container to registry
+        run: |
+          podman tag machine-os:latest \
+            ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest
+          podman tag machine-os:latest \
+            ghcr.io/gbraad-dotfiles/fedora-workstation-disk:41
+          podman tag machine-os:latest \
+            ghcr.io/gbraad-dotfiles/fedora-workstation-disk:${{ steps.get-tag.outputs.TAG }}
+          podman push ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest
+          podman push ghcr.io/gbraad-dotfiles/fedora-workstation-disk:41
+          podman push ghcr.io/gbraad-dotfiles/fedora-workstation-disk:${{ steps.get-tag.outputs.TAG }}
