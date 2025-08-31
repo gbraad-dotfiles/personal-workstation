@@ -1,0 +1,80 @@
+name: Build packer disk image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "main"
+  pull_request: {}
+  schedule:
+    - cron: "0 0 */2 * *"
+
+jobs:
+  packer-machinefile:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Remove unwanted stuff
+        uses: gbraad-actions/remove-unwanted@v1
+
+      - uses: actions/checkout@v4
+
+      - name: Workaround podman issues in GH actions
+        run: |
+          # see https://github.com/osbuild/bootc-image-builder/issues/446
+          sudo rm -rf /var/lib/containers/storage
+          sudo mkdir -p /etc/containers
+          echo -e "[storage]\ndriver = \"overlay\"\nrunroot = \"/run/containers/storage\"\ngraphroot = \"/var/lib/containers/storage\"" | sudo tee /etc/containers/storage.conf
+
+      - name: Workarounds for GH runner diskspace
+        run: |
+          sudo mkdir -p /mnt/var/lib/containers
+          sudo mount -o bind /mnt/var/lib/containers /var/lib/containers
+          sudo mkdir /var/lib/containers/storage
+
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Dotfiles (install from action)
+        uses: gbraad-dotfiles/install-action@main
+        with:
+          upstream: true
+
+      - name: Install required virtualization software
+        continue-on-error: true
+        uses: gbraad-actions/setup-virtualization@v2
+
+      - name: Install containers tools (optional)
+        continue-on-error: true
+        uses: gbraad-actions/setup-container-tools@v1
+
+      - name: Install packer
+        uses: gbraad-actions/install-packer@v1
+
+      - name: Install machinefile
+        uses: gbraad-actions/zsh-action@main
+        with:
+          as_user: runner
+          run: |
+            apps machinefile install
+
+      # as_user starts a new process/session; ensures this runs accelerated
+      - name: Run packer init and build process
+        uses: gbraad-actions/zsh-action@main
+        with:
+          as_user: runner
+          run: |
+            packer init  .packer/machine.pkr.hcl
+            packer build .packer/machine.pkr.hcl
+
+      - name: Create and push disk image
+        run: |
+          TAG=$(date +'%y%m%d')
+
+          podman build -t ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest -f .packer/Containerfile-disk .
+          podman tag ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest ghcr.io/gbraad-dotfiles/fedora-workstation-disk:${TAG}
+
+          podman login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+
+          podman push ghcr.io/gbraad-dotfiles/fedora-workstation-disk:latest
+          podman push ghcr.io/gbraad-dotfiles/fedora-workstation-disk:${TAG}

@@ -1,6 +1,13 @@
 name: Build container image
+
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - "main"
+  pull_request: {}
+  schedule:
+    - cron: "0 0 */2 * *"
 
 env:
     BASE_IMAGE: ghcr.io/gbraad-dotfiles/fedora
