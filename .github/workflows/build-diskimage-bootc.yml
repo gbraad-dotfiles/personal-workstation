@@ -171,9 +171,10 @@ jobs:
 
       - name: Wrap disk image in container
         run: |
+          buildah manifest create machine-os
           buildah manifest add --artifact --artifact-type="" \
             --os="linux" --arch="x86_64" --annotation "disktype=qemu" \
-            localhost/machine-os \
+            machine-os \
             ./disk-amd64/machine.x86_64.qemu.qcow2.zst
 
       - name: Login to ghcr.io
